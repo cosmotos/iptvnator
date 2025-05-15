@@ -68,20 +68,17 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-      - name: 📤 Upload .app bundle
-        if: matrix.platform == 'macos-latest'
+      - name: Upload aarch64 .dmg
+        if: matrix.args == '--target aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
-          name: iptvnator-app-${{ matrix.args }}
-          path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
+          name: iptvnator-dmg-aarch64
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+      
+      - name: Upload x86_64 .dmg
+        if: matrix.args == '--target x86_64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptvnator-dmg-x86_64
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
 
-      - name: 📤 Upload .dmg installer
-        if: matrix.platform == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptvnator-dmg-${{ matrix.args }}
-          path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
