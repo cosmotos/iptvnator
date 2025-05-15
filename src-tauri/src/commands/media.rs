@@ -29,12 +29,37 @@ pub async fn open_in_mpv<R: Runtime>(
     path: String,
     title: String,
     thumbnail: Option<String>,
-    user_agent: Option<String>,
-    referer: Option<String>,
-    origin: Option<String>,
     app_handle: tauri::AppHandle<R>,
 ) -> Result<u32, String> {
-    info!("Custom MVP path: {}", path);
+    use std::os::unix::net::UnixStream;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::fs;
+    use std::path::Path;
+
+    let ipc_socket = "/tmp/mpv-socket";
+
+    // Try using an existing MPV instance
+    if let Ok(mut stream) = UnixStream::connect(ipc_socket) {
+        let command = format!(r#"{{"command": ["loadfile", "{}", "replace"]}}"#, url);
+        writeln!(stream, "{}", command)
+            .map_err(|e| format!("Failed to send command to MPV: {}", e))?;
+
+        let process = MpvProcess {
+            id: 0,
+            url: url.clone(),
+            start_time: 0,
+            last_known_time: None,
+            title,
+            thumbnail,
+        };
+
+        let _ = app_handle.emit("mpv-process-reused", process);
+        return Ok(0);
+    }
+
+    // No running MPV — try to find MPV binary
     let mpv_paths = if cfg!(target_os = "windows") {
         vec![
             r"C:\Program Files\mpv\mpv.exe",
@@ -55,97 +80,40 @@ pub async fn open_in_mpv<R: Runtime>(
     } else {
         mpv_paths
             .iter()
-            .find(|&path| Path::new(path).exists())
+            .find(|&p| Path::new(p).exists())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "mpv".to_string())
     };
 
-    info!("Using the following MPV player path: {}", mpv_path);
-
-    // Add --input-ipc-server for IPC communication
-    let ipc_socket = format!(
-        "/tmp/mpv-socket-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-
-    let mut command = Command::new(mpv_path.clone());
-    command.arg(format!("--input-ipc-server={}", ipc_socket));
-    
-    // Add headers if they are provided
-    if let Some(ua) = user_agent {
-        if !ua.is_empty() {
-            command.arg(format!("--user-agent={}", ua));
-        }
+    // Clean up any stale socket
+    if Path::new(ipc_socket).exists() {
+        let _ = fs::remove_file(ipc_socket);
     }
 
-    if let Some(ref_url) = referer {
-        if !ref_url.is_empty() {
-            command.arg(format!("--referrer={}", ref_url));
-        }
-    }
-
-    if let Some(origin_url) = origin {
-        if !origin_url.is_empty() {
-            command.arg(format!("--http-header-fields=Origin: {}", origin_url));
-        }
-    }
-
-    command.arg(&url);
-
-    // Log the complete command line
-    let command_str = format!(
-        "{} {}",
-        mpv_path,
-        command
-            .get_args()
-            .map(|arg| arg.to_string_lossy())
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    info!("Complete MPV command: {}", command_str);
-
-    // Emit an event before attempting to spawn MPV
-    app_handle.emit("player-launching", "MPV").map_err(|e| e.to_string())?;
-
-    // Try to spawn the MPV process and handle errors
-    let child = match command.spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            let error_msg = format!("Failed to launch MPV: {}", e);
-            info!("{}", error_msg);
-            app_handle.emit("player-error", error_msg.clone()).map_err(|e| e.to_string())?;
-            return Err(error_msg);
-        }
-    };
+    // Start new MPV with fixed socket path
+    let mut child = Command::new(&mpv_path)
+        .arg("--idle=yes")
+        .arg("--force-window=yes")
+        .arg(format!("--input-ipc-server={}", ipc_socket))
+        .arg(&url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to launch MPV: {}", e))?;
 
     let process_id = child.id();
 
-    // Clone app_handle for the monitoring thread
+    // Spawn thread to track when MPV exits
     let app_handle_clone = app_handle.clone();
-
-    // Spawn a thread to monitor the process
     thread::spawn(move || {
-        let status = child.wait_with_output();
-        
-        // Process has exited, remove it from our map and notify frontend
-        if let Some(process) = MPV_PROCESSES.lock().unwrap().remove(&process_id) {
-            let _ = app_handle_clone.emit("mpv-process-removed", process);
-            
-            // If process exited with an error, emit that as well
-            if let Ok(output) = status {
-                if !output.status.success() {
-                    let error_msg = format!("MPV exited with error code: {}", output.status);
-                    let _ = app_handle_clone.emit("player-error", error_msg);
-                }
-            }
+        let _ = child.wait();
+        if let Some(p) = MPV_PROCESSES.lock().unwrap().remove(&process_id) {
+            let _ = app_handle_clone.emit("mpv-process-removed", p);
         }
     });
 
-    // Store process information
-    let mpv_process = MpvProcess {
+    // Add to MPV_PROCESSES
+    let process = MpvProcess {
         id: process_id,
         url: url.clone(),
         start_time: SystemTime::now()
@@ -160,15 +128,9 @@ pub async fn open_in_mpv<R: Runtime>(
     MPV_PROCESSES
         .lock()
         .unwrap()
-        .insert(process_id, mpv_process.clone());
+        .insert(process_id, process.clone());
 
-    // Updated event emission
-    app_handle
-        .emit("mpv-process-added", mpv_process)
-        .map_err(|e| e.to_string())?;
-
-    // Emit success event
-    app_handle.emit("player-launched", "MPV").map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("mpv-process-added", process.clone());
 
     Ok(process_id)
 }
