@@ -109,7 +109,7 @@
             "exceptionDomain": "*",
             "frameworks": [],
             "providerShortName": null,
-            "signingIdentity": "-"
+            "signingIdentity": null
         },
         "linux": {
             "appimage": {
