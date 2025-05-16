@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
+
 jobs:
   publish-tauri:
     permissions:
@@ -58,8 +58,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          
         with:
           tagName: app-v__VERSION__ # the action automatically replaces \_\_VERSION\_\_ with the app version.
           releaseName: 'App v__VERSION__'
@@ -67,18 +66,3 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
-      - name: Upload aarch64 .dmg
-        if: matrix.args == '--target aarch64-apple-darwin'
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptvnator-dmg-aarch64
-          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-      
-      - name: Upload x86_64 .dmg
-        if: matrix.args == '--target x86_64-apple-darwin'
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptvnator-dmg-x86_64
-          path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-
